@@ -120,14 +120,23 @@ HTTP リクエストの処理フローを `|>` パイプで繋いだパイプラ
 
 ```
 GET /users/{id}
-  |> input(...)          リクエストから値を取り出す
-  |> validate(...)       入力値を検証する               ~> エラーレスポンス
-  |> transform(...)      値を変換する
-  |> pkg(...)            importしたステップ              ~> エラーレスポンス
-  |> guard expr          条件ゲート                     ~> エラーレスポンス
-  |> match expr { ... }  値によるパターンマッチ分岐     ~> エラーレスポンス
-  |> respond N { ... }   レスポンスを返す（ステータス + ボディ）
+  cache(...)               ルートレベル指令（任意）
+  |> input(...)            リクエストから値を取り出す
+  |> validate(...)         入力値を検証する               ~> エラーレスポンス
+  |> transform(...)        値を変換する
+  |> pkg(...)              importしたステップ              ~> エラーレスポンス
+  |> guard expr            条件ゲート                     ~> エラーレスポンス
+  |> match expr { ... }    値によるパターンマッチ分岐     ~> エラーレスポンス
+  |> respond N { ... }     レスポンスを返す（ステータス + ボディ）
 ```
+
+## ルートレベル指令
+
+ルートレベル指令は、パイプラインステップ（`|>`）ではなく、ルート全体に適用される横断的関心事を宣言する。ルート宣言の直後、最初の `|>` の前にインデントして記述する。
+
+| 指令 | 役割 |
+|------|------|
+| **cache(...)** | HTTPキャッシュの振る舞いを宣言する（§13） |
 
 ## ビルトインステップ一覧
 
@@ -546,7 +555,212 @@ import call  = github.com/reverhttp/std-call@0.1.0
 
 ---
 
-# 13. カスタムステップ（import）
+# 13. HTTP キャッシュ
+
+`cache(...)` はルートレベル指令であり、パイプラインステップ（`|>`）ではなく横断的関心事としてルートに宣言する。レスポンスキャッシュヘッダー（Cache-Control, ETag, Last-Modified, Vary）と条件付きリクエスト（If-None-Match, If-Modified-Since → 304 Not Modified）の振る舞いを宣言的に記述する。
+
+`etag` / `last-modified` の式はパイプライン中の変数を前方参照し、ジェネレータが適切なタイミングで評価する。
+
+## DSL
+
+```
+GET /users/{id}
+  cache(max-age: 3600, public, etag: hash(user))
+  |> input(id: path.id)
+  |> validate(id: int & min(1))          ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(User, id) as user             ~> 404 { error: "user not found" }
+  |> respond 200 { id: user.id, name: user.name, email: user.email }
+```
+
+`cache(...)` はルート宣言の直後、最初の `|>` の前に書く。
+
+## パラメータ一覧
+
+| パラメータ | 型 | 説明 |
+|---|---|---|
+| `max-age` | int | Cache-Control max-age（秒） |
+| `s-maxage` | int | Cache-Control s-maxage（共有キャッシュ向け） |
+| `public` | flag | Cache-Control: public |
+| `private` | flag | Cache-Control: private |
+| `no-cache` | flag | Cache-Control: no-cache（常に再検証） |
+| `no-store` | flag | Cache-Control: no-store（キャッシュ禁止） |
+| `etag` | expr | ETag ヘッダーの値。条件付きリクエスト（If-None-Match → 304）を有効化 |
+| `last-modified` | expr | Last-Modified ヘッダーの値。条件付きリクエスト（If-Modified-Since → 304）を有効化 |
+| `vary` | list | Vary ヘッダー（キャッシュのキーとなるリクエストヘッダーを指定） |
+
+## キャッシュ制御ヘッダー
+
+`cache(...)` のパラメータは以下のレスポンスヘッダーに変換される。
+
+```
+cache(max-age: 3600, public, etag: hash(user), vary: [Accept])
+```
+
+↓ 生成されるレスポンスヘッダー
+
+```
+Cache-Control: public, max-age=3600
+ETag: "a1b2c3d4"
+Vary: Accept
+```
+
+- `max-age`, `s-maxage`, `public`, `private`, `no-cache`, `no-store` → `Cache-Control` ヘッダーのディレクティブとして結合
+- `etag` → `ETag` ヘッダー（式の評価結果をダブルクォートで囲む）
+- `last-modified` → `Last-Modified` ヘッダー（ISO8601 → HTTP-date 形式に変換）
+- `vary` → `Vary` ヘッダー
+
+## 条件付きリクエスト
+
+`etag` または `last-modified` を宣言すると、条件付きリクエストが自動的に有効化される。
+
+### ETag による検証
+
+`etag` 宣言時、ジェネレータは以下の振る舞いを実装する。
+
+1. レスポンスに `ETag` ヘッダーを付与
+2. リクエストに `If-None-Match` ヘッダーがある場合、ETag 値と比較
+3. 一致すれば `304 Not Modified`（ボディなし）を返し、パイプラインの残りをスキップ
+
+### Last-Modified による検証
+
+`last-modified` 宣言時、ジェネレータは以下の振る舞いを実装する。
+
+1. レスポンスに `Last-Modified` ヘッダーを付与
+2. リクエストに `If-Modified-Since` ヘッダーがある場合、日時を比較
+3. 変更がなければ `304 Not Modified`（ボディなし）を返し、パイプラインの残りをスキップ
+
+### 優先順位
+
+`etag` と `last-modified` の両方が宣言されている場合、`etag`（If-None-Match）が優先される。両方のヘッダーがリクエストに存在する場合、ETag の一致を先に評価し、一致すれば 304 を返す。
+
+## JSON IR
+
+```json
+{
+  "cache": {
+    "max_age": 3600,
+    "visibility": "public",
+    "etag": { "fn": "hash", "from": "user" },
+    "vary": ["Accept"]
+  }
+}
+```
+
+| DSL | JSON IR |
+|-----|---------|
+| `max-age: 3600` | `"max_age": 3600` |
+| `s-maxage: 600` | `"s_maxage": 600` |
+| `public` | `"visibility": "public"` |
+| `private` | `"visibility": "private"` |
+| `no-cache` | `"no_cache": true` |
+| `no-store` | `"no_store": true` |
+| `etag: hash(user)` | `"etag": { "fn": "hash", "from": "user" }` |
+| `etag: user.version` | `"etag": "user.version"` |
+| `last-modified: user.updated_at` | `"last_modified": "user.updated_at"` |
+| `vary: [Accept, Authorization]` | `"vary": ["Accept", "Authorization"]` |
+
+## 使用パターン
+
+### 時間ベースキャッシュ
+
+```
+GET /public/config
+  cache(max-age: 3600, public)
+  |> ...
+```
+
+### ETag 検証付きキャッシュ
+
+```
+GET /users/{id}
+  cache(max-age: 3600, public, etag: hash(user))
+  |> input(id: path.id)
+  |> validate(id: int & min(1))          ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(User, id) as user             ~> 404 { error: "user not found" }
+  |> respond 200 { id: user.id, name: user.name, email: user.email }
+```
+
+```json
+{
+  "route": { "method": "GET", "path": "/users/{id}" },
+  "cache": {
+    "max_age": 3600,
+    "visibility": "public",
+    "etag": { "fn": "hash", "from": "user" }
+  },
+  "input": { "id": { "from": "path.id" } },
+  "validate": {
+    "rules": { "id": { "type": "int", "min": 1 } },
+    "error": { "status": 400, "body": { "error": "invalid id" } }
+  },
+  "transform_in": {
+    "id": { "cast": "int", "from": "id" }
+  },
+  "process": {
+    "steps": [
+      {
+        "bind": "user",
+        "use": "fetch",
+        "input": { "type": "User", "id": "id" },
+        "error": { "status": 404, "body": { "error": "user not found" } }
+      }
+    ]
+  },
+  "output": {
+    "status": 200,
+    "body": {
+      "id": "user.id",
+      "name": "user.name",
+      "email": "user.email"
+    }
+  }
+}
+```
+
+### 常に再検証
+
+```
+GET /users/{id}/profile
+  cache(no-cache, etag: hash(user))
+  |> ...
+```
+
+### キャッシュ禁止
+
+```
+POST /users
+  cache(no-store)
+  |> ...
+```
+
+### Last-Modified による検証
+
+```
+GET /articles/{id}
+  cache(max-age: 600, public, last-modified: article.updated_at)
+  |> input(id: path.id)
+  |> validate(id: int & min(1))            ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(Article, id) as article         ~> 404 { error: "not found" }
+  |> respond 200 { id: article.id, title: article.title, body: article.body }
+```
+
+```json
+{
+  "route": { "method": "GET", "path": "/articles/{id}" },
+  "cache": {
+    "max_age": 600,
+    "visibility": "public",
+    "last_modified": "article.updated_at"
+  }
+}
+```
+
+---
+
+# 14. カスタムステップ（import）
 
 `import` でパッケージを読み込むと、エイリアス名がパイプラインステップとして使えるようになる。ビルトインステップと同じ感覚で呼び出せる。
 
@@ -614,7 +828,7 @@ GET /users/{id}/cached
 
 ---
 
-# 14. パッケージ
+# 15. パッケージ
 
 カスタムステップはパッケージとして配布する。1パッケージ = 1ステップ。
 
@@ -740,12 +954,13 @@ my-project/
 
 ---
 
-# 15. DSL から JSON IR へのマッピング
+# 16. DSL から JSON IR へのマッピング
 
 DSL のパイプラインステップは、JSON IR の対応するセクションに変換される。
 
 | DSL ステップ | JSON IR セクション |
 |-------------|-------------------|
+| `cache(...)` | `"cache"` |
 | `input(...)` | `"input"` |
 | `validate(...)` | `"validate"` (`"rules"` + `"error"`) |
 | `transform(...)` | `"transform_in"` |
@@ -759,7 +974,7 @@ importしたステップは JSON IR では `"use": "<alias>"` としてマッピ
 
 ---
 
-# 16. IR 全体構造
+# 17. IR 全体構造
 
 ひとつのアプリケーションの IR 全体像。
 
@@ -783,6 +998,11 @@ importしたステップは JSON IR では `"use": "<alias>"` としてマッピ
   "routes": [
     {
       "route": { "method": "GET", "path": "/users/{id}" },
+      "cache": {
+        "max_age": 3600,
+        "visibility": "public",
+        "etag": { "fn": "hash", "from": "user" }
+      },
       "input": { "id": { "from": "path.id" } },
       "validate": {
         "rules": { "id": { "type": "int", "min": 1 } },
@@ -816,7 +1036,7 @@ importしたステップは JSON IR では `"use": "<alias>"` としてマッピ
 
 ---
 
-# 17. 既存技術との位置づけ
+# 18. 既存技術との位置づけ
 
 ```
         形だけ              流れも書ける         実装も含む
@@ -840,17 +1060,18 @@ TypeSpec              Camel
 
 ---
 
-# 18. 今後の拡張（非 v0.1）
+# 19. 今後の拡張（非 v0.1）
 
 - match アーム内の複数ステップ（パイプラインのネスト）
 - ページネーション支援
 - middleware / hooks
 - バッチ処理・並列処理
 - 認証・認可フローの宣言
+- ルートレベル指令の拡充（`auth(...)`, `rate-limit(...)`, `cors(...)` 等）
 
 ---
 
-# 19. まとめ
+# 20. まとめ
 
 ReverHTTP は：
 
