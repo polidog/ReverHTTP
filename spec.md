@@ -45,13 +45,15 @@ HTTPフローの定義                  Express / Hono / FastAPI
 
 # 3. 全体構造
 
-ReverHTTP のファイルは3つのセクションで構成される。
+ReverHTTP のファイルは4つのセクションで構成される。
 
 ```
 ┌─────────────────────────────┐
 │  Imports (パッケージ宣言)     │  外部ステップの読み込み
 ├─────────────────────────────┤
 │  Types (型定義)              │  エンティティの形を宣言
+├─────────────────────────────┤
+│  Defaults (デフォルト指令)    │  全ルートに適用されるルートレベル指令
 ├─────────────────────────────┤
 │  Routes (フロー定義)         │  HTTPリクエストの処理フローを宣言
 └─────────────────────────────┘
@@ -127,7 +129,7 @@ GET /users/{id}
   |> pkg(...)              importしたステップ              ~> エラーレスポンス
   |> guard expr            条件ゲート                     ~> エラーレスポンス
   |> match expr { ... }    値によるパターンマッチ分岐     ~> エラーレスポンス
-  |> respond N { ... }     レスポンスを返す（ステータス + ボディ）
+  |> respond N             レスポンスを返す（ボディなしも可）
 ```
 
 ## ルートレベル指令
@@ -137,6 +139,8 @@ GET /users/{id}
 | 指令 | 役割 |
 |------|------|
 | **cache(...)** | HTTPキャッシュの振る舞いを宣言する（§13） |
+| **cors(...)** | CORSヘッダーを宣言する（§14） |
+| **auth(...)** | 認証・認可を宣言する（§15） |
 
 ## ビルトインステップ一覧
 
@@ -149,7 +153,7 @@ GET /users/{id}
 | **transform(...)** | 値を変換する（型変換、文字列処理等） |
 | **guard** | 条件を検証し、偽ならエラーフローへ |
 | **match** | 値によるパターンマッチで分岐する（各アームはシングルステップ） |
-| **respond N { ... }** | HTTPステータスコードとレスポンスボディを返す |
+| **respond** | HTTPステータスコードとレスポンスを返す。ボディは任意。`with headers` でカスタムヘッダーを付与できる |
 
 データ操作（fetch、create、update、delete 等）はビルトインではなく、パッケージとして import する。
 
@@ -162,6 +166,28 @@ GET /users/{id}
 | `as name` | ステップの結果を変数に束縛する |
 | `&` | バリデーション制約の合成 |
 | `import` | パッケージの読み込みとエイリアス宣言 |
+| `with headers { ... }` | respond にカスタムレスポンスヘッダーを付与する |
+
+## respond の構文
+
+`respond` はパイプラインの最終ステップとしてHTTPレスポンスを返す。ボディは任意であり、`with headers` でカスタムヘッダーを付与できる。
+
+### 構文パターン
+
+```
+|> respond 204                                              # ボディなし
+|> respond 200 { id: user.id, name: user.name }             # ボディあり
+|> respond 200 { id: user.id } with headers { x-req: req.id }  # ボディ + ヘッダー
+|> respond 301 with headers { location: "/new" }            # リダイレクト
+```
+
+### JSON IR
+
+```json
+{ "output": { "status": 204 } }
+{ "output": { "status": 301, "headers": { "location": "/new" } } }
+{ "output": { "status": 200, "body": { "id": "user.id", "name": "user.name" }, "headers": { "x-req": "req.id" } } }
+```
 
 ---
 
@@ -760,7 +786,163 @@ GET /articles/{id}
 
 ---
 
-# 14. カスタムステップ（import）
+# 14. Defaults とルートレベル指令の継承
+
+`defaults` ブロックはルートレベル指令のデフォルト値を宣言する。`defaults` に記述した指令は全ルートに適用され、個別ルートで上書きできる。
+
+## DSL
+
+```
+defaults
+  cors(origins: ["*"])
+  auth(bearer)
+```
+
+`defaults` はファイルの Types と Routes の間に記述する。
+
+## CORS
+
+CORS（Cross-Origin Resource Sharing）は Web API でほぼ必須の横断的関心事であり、`defaults` の主要ユースケースである。`cors(...)` はルートレベル指令としてCORSヘッダーの振る舞いを宣言する。
+
+### パラメータ一覧
+
+| パラメータ | 型 | 説明 |
+|---|---|---|
+| `origins` | list | Access-Control-Allow-Origin（`["*"]` で全許可） |
+| `methods` | list | Access-Control-Allow-Methods |
+| `headers` | list | Access-Control-Allow-Headers |
+| `expose-headers` | list | Access-Control-Expose-Headers |
+| `max-age` | int | Access-Control-Max-Age（プリフライトキャッシュ秒数） |
+| `credentials` | flag | Access-Control-Allow-Credentials: true |
+| `none` | keyword | CORS を無効化（defaults の上書き用） |
+
+### defaults + ルート上書きの例
+
+```
+defaults
+  cors(origins: ["https://app.example.com"], credentials)
+
+GET /api/users
+  |> ...                       # defaults の cors が適用
+
+GET /public/health
+  cors(none)                   # このルートだけ CORS 無効化
+  |> respond 200 { status: "ok" }
+
+GET /api/admin
+  cors(origins: ["https://admin.example.com"])  # 別設定で上書き
+  auth(bearer, roles: ["admin"])
+  |> ...
+```
+
+### JSON IR
+
+```json
+{
+  "defaults": {
+    "cors": {
+      "origins": ["https://app.example.com"],
+      "credentials": true
+    }
+  }
+}
+```
+
+ルート単位の上書き:
+
+```json
+{
+  "cors": null
+}
+```
+
+`cors(none)` → `"cors": null` で無効化を表現する。
+
+---
+
+# 15. 認証・認可
+
+`auth(...)` はルートレベル指令として認証・認可の要件を宣言する。`defaults` で全ルートに適用し、個別ルートで上書きできる。
+
+## DSL
+
+```
+GET /admin/users
+  auth(bearer, roles: ["admin"]) as current_user
+  |> fetch(User) as users
+  |> respond 200 { users: users, requested_by: current_user.name }
+```
+
+- `as` で認証済みエンティティを変数に束縛（任意）
+- 認証失敗 → 401 Unauthorized
+- 認可失敗（role/permission不足） → 403 Forbidden
+
+## パラメータ一覧
+
+| パラメータ | 型 | 説明 |
+|---|---|---|
+| (第1引数) | keyword | 認証方式（`bearer`, `api-key`, `basic`） |
+| `roles` | list | 必要なロール（いずれかに一致で認可） |
+| `permissions` | list | 必要なパーミッション（すべてに一致で認可） |
+| `none` | keyword | 認証を無効化（defaults の上書き用） |
+
+## JSON IR
+
+```json
+{
+  "auth": {
+    "method": "bearer",
+    "roles": ["admin"],
+    "bind": "current_user"
+  }
+}
+```
+
+## 使用パターン
+
+### 認証のみ
+
+```
+GET /profile
+  auth(bearer)
+  |> ...
+```
+
+### 認証 + ロール
+
+```
+GET /admin/users
+  auth(bearer, roles: ["admin", "editor"])
+  |> ...
+```
+
+### 認証 + パーミッション
+
+```
+DELETE /users/{id}
+  auth(bearer, permissions: ["users:read", "users:write"])
+  |> ...
+```
+
+### API キー
+
+```
+GET /api/data
+  auth(api-key)
+  |> ...
+```
+
+### 認証無効化
+
+```
+GET /public/health
+  auth(none)
+  |> respond 200 { status: "ok" }
+```
+
+---
+
+# 16. カスタムステップ（import）
 
 `import` でパッケージを読み込むと、エイリアス名がパイプラインステップとして使えるようになる。ビルトインステップと同じ感覚で呼び出せる。
 
@@ -828,7 +1010,7 @@ GET /users/{id}/cached
 
 ---
 
-# 15. パッケージ
+# 17. パッケージ
 
 カスタムステップはパッケージとして配布する。1パッケージ = 1ステップ。
 
@@ -954,19 +1136,24 @@ my-project/
 
 ---
 
-# 16. DSL から JSON IR へのマッピング
+# 18. DSL から JSON IR へのマッピング
 
 DSL のパイプラインステップは、JSON IR の対応するセクションに変換される。
 
 | DSL ステップ | JSON IR セクション |
 |-------------|-------------------|
+| `defaults` | `"defaults"` |
 | `cache(...)` | `"cache"` |
+| `cors(...)` | `"cors"` |
+| `auth(...)` | `"auth"` |
 | `input(...)` | `"input"` |
 | `validate(...)` | `"validate"` (`"rules"` + `"error"`) |
 | `transform(...)` | `"transform_in"` |
 | `guard` / `match` / importしたステップ | `"process"` (`"steps"` 配列) |
 | `import` | `"imports"` |
+| `respond N` | `"output"` (`"status"` のみ) |
 | `respond N { ... }` | `"output"` (`"status"` + `"body"`) |
+| `with headers { ... }` | `"output"."headers"` |
 | `~> N { ... }` | 各セクションの `"error"` |
 | `as name` | ステップの `"bind"` |
 
@@ -974,7 +1161,7 @@ importしたステップは JSON IR では `"use": "<alias>"` としてマッピ
 
 ---
 
-# 17. IR 全体構造
+# 19. IR 全体構造
 
 ひとつのアプリケーションの IR 全体像。
 
@@ -995,9 +1182,14 @@ importしたステップは JSON IR では `"use": "<alias>"` としてマッピ
       "created_at": "datetime"
     }
   },
+  "defaults": {
+    "cors": { "origins": ["*"] },
+    "auth": { "method": "bearer" }
+  },
   "routes": [
     {
       "route": { "method": "GET", "path": "/users/{id}" },
+      "auth": { "method": "bearer", "roles": ["admin"], "bind": "current_user" },
       "cache": {
         "max_age": 3600,
         "visibility": "public",
@@ -1036,7 +1228,7 @@ importしたステップは JSON IR では `"use": "<alias>"` としてマッピ
 
 ---
 
-# 18. 既存技術との位置づけ
+# 20. 既存技術との位置づけ
 
 ```
         形だけ              流れも書ける         実装も含む
@@ -1060,18 +1252,18 @@ TypeSpec              Camel
 
 ---
 
-# 19. 今後の拡張（非 v0.1）
+# 21. 今後の拡張（非 v0.1）
 
 - match アーム内の複数ステップ（パイプラインのネスト）
 - ページネーション支援
 - middleware / hooks
 - バッチ処理・並列処理
-- 認証・認可フローの宣言
-- ルートレベル指令の拡充（`auth(...)`, `rate-limit(...)`, `cors(...)` 等）
+- ルートレベル指令の拡充（`rate-limit(...)` 等）
+- defaults の拡張（パスプレフィックスによるグルーピング等）
 
 ---
 
-# 20. まとめ
+# 22. まとめ
 
 ReverHTTP は：
 
