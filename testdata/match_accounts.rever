@@ -1,0 +1,12 @@
+import fetch = github.com/reverhttp/std-fetch@0.1.0
+
+GET /accounts/{id}
+  |> input(id: path.id, role: header.x-role)
+  |> validate(id: int & min(1), role: string)  ~> 400 { error: "invalid input" }
+  |> transform(id: int(id))
+  |> match role {
+       "user":  fetch(User, id)
+       "admin": fetch(Admin, id)
+       _:                                      ~> 400 { error: "unknown role" }
+     } as account                              ~> 404 { error: "account not found" }
+  |> respond 200 { id: account.id, name: account.name, role: role }

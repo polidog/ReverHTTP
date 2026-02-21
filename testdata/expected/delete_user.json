@@ -1,0 +1,83 @@
+{
+  "version": "0.1",
+  "imports": {
+    "delete": {
+      "source": "github.com/reverhttp/std-delete",
+      "version": "0.1.0"
+    },
+    "fetch": {
+      "source": "github.com/reverhttp/std-fetch",
+      "version": "0.1.0"
+    }
+  },
+  "routes": [
+    {
+      "route": {
+        "method": "DELETE",
+        "path": "/users/{id}"
+      },
+      "input": {
+        "id": {
+          "from": "path.id"
+        }
+      },
+      "validate": {
+        "rules": {
+          "id": {
+            "type": "int",
+            "min": 1
+          }
+        },
+        "error": {
+          "status": 400,
+          "body": {
+            "error": "invalid id"
+          }
+        }
+      },
+      "transform_in": {
+        "id": {
+          "cast": "int",
+          "from": "id"
+        }
+      },
+      "process": {
+        "steps": [
+          {
+            "bind": "user",
+            "use": "fetch",
+            "input": {
+              "id": "id",
+              "type": "User"
+            },
+            "error": {
+              "status": 404,
+              "body": {
+                "error": "user not found"
+              }
+            }
+          },
+          {
+            "use": "delete",
+            "input": {
+              "id": "id",
+              "type": "User"
+            },
+            "error": {
+              "status": 500,
+              "body": {
+                "error": "delete failed"
+              }
+            }
+          }
+        ]
+      },
+      "output": {
+        "status": 200,
+        "body": {
+          "deleted": "true"
+        }
+      }
+    }
+  ]
+}

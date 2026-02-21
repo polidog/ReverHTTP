@@ -1,0 +1,107 @@
+{
+  "version": "0.1",
+  "imports": {
+    "create": {
+      "source": "github.com/reverhttp/std-create",
+      "version": "0.1.0"
+    },
+    "fetch": {
+      "source": "github.com/reverhttp/std-fetch",
+      "version": "0.1.0"
+    }
+  },
+  "routes": [
+    {
+      "route": {
+        "method": "POST",
+        "path": "/users"
+      },
+      "input": {
+        "email": {
+          "from": "body.email"
+        },
+        "name": {
+          "from": "body.name"
+        }
+      },
+      "validate": {
+        "rules": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "name": {
+            "type": "string",
+            "min": 1,
+            "max": 100
+          }
+        },
+        "error": {
+          "status": 400,
+          "body": {
+            "details": "errors",
+            "error": "validation failed"
+          }
+        }
+      },
+      "transform_in": {
+        "email": {
+          "fn": "lower",
+          "from": "email"
+        },
+        "name": {
+          "fn": "trim",
+          "from": "name"
+        }
+      },
+      "process": {
+        "steps": [
+          {
+            "bind": "existing",
+            "use": "fetch",
+            "input": {
+              "email": "email",
+              "type": "User"
+            }
+          },
+          {
+            "guard": {
+              "not": "existing"
+            },
+            "error": {
+              "status": 409,
+              "body": {
+                "error": "email already taken"
+              }
+            }
+          },
+          {
+            "bind": "user",
+            "use": "create",
+            "input": {
+              "data": {
+                "email": "email",
+                "name": "name"
+              },
+              "type": "User"
+            },
+            "error": {
+              "status": 500,
+              "body": {
+                "error": "creation failed"
+              }
+            }
+          }
+        ]
+      },
+      "output": {
+        "status": 201,
+        "body": {
+          "email": "user.email",
+          "id": "user.id",
+          "name": "user.name"
+        }
+      }
+    }
+  ]
+}

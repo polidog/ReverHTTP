@@ -1,0 +1,25 @@
+import fetch = github.com/reverhttp/std-fetch@0.1.0
+
+type User {
+  id: int
+  name: string
+  email: string
+}
+
+defaults
+  cors(origins: ["*"])
+  auth(bearer)
+
+GET /users/{id}
+  cache(max-age: 3600, public, etag: hash(user))
+  auth(bearer, roles: ["admin"]) as current_user
+  |> input(id: path.id)
+  |> validate(id: int & min(1))          ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(User, id) as user             ~> 404 { error: "user not found" }
+  |> respond 200 { id: user.id, name: user.name, email: user.email }
+
+GET /public/health
+  cors(none)
+  auth(none)
+  |> respond 200 { status: "ok" }

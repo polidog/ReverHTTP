@@ -1,0 +1,68 @@
+{
+  "version": "0.1",
+  "imports": {
+    "fetch": {
+      "source": "github.com/reverhttp/std-fetch",
+      "version": "0.1.0"
+    }
+  },
+  "routes": [
+    {
+      "route": {
+        "method": "GET",
+        "path": "/users/{id}"
+      },
+      "input": {
+        "id": {
+          "from": "path.id"
+        }
+      },
+      "validate": {
+        "rules": {
+          "id": {
+            "type": "int",
+            "min": 1
+          }
+        },
+        "error": {
+          "status": 400,
+          "body": {
+            "error": "invalid id"
+          }
+        }
+      },
+      "transform_in": {
+        "id": {
+          "cast": "int",
+          "from": "id"
+        }
+      },
+      "process": {
+        "steps": [
+          {
+            "bind": "user",
+            "use": "fetch",
+            "input": {
+              "id": "id",
+              "type": "User"
+            },
+            "error": {
+              "status": 404,
+              "body": {
+                "error": "user not found"
+              }
+            }
+          }
+        ]
+      },
+      "output": {
+        "status": 200,
+        "body": {
+          "email": "user.email",
+          "id": "user.id",
+          "name": "user.name"
+        }
+      }
+    }
+  ]
+}

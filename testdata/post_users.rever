@@ -1,0 +1,14 @@
+import fetch  = github.com/reverhttp/std-fetch@0.1.0
+import create = github.com/reverhttp/std-create@0.1.0
+
+POST /users
+  |> input(name: body.name, email: body.email)
+  |> validate(
+       name: string & min(1) & max(100),
+       email: string & format(email)
+     )                                   ~> 400 { error: "validation failed", details: errors }
+  |> transform(name: trim(name), email: lower(email))
+  |> fetch(User, email: email) as existing
+  |> guard !existing                     ~> 409 { error: "email already taken" }
+  |> create(User, { name, email }) as user ~> 500 { error: "creation failed" }
+  |> respond 201 { id: user.id, name: user.name, email: user.email }

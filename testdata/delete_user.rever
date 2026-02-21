@@ -1,0 +1,10 @@
+import fetch  = github.com/reverhttp/std-fetch@0.1.0
+import delete = github.com/reverhttp/std-delete@0.1.0
+
+DELETE /users/{id}
+  |> input(id: path.id)
+  |> validate(id: int & min(1))          ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(User, id) as user            ~> 404 { error: "user not found" }
+  |> delete(User, id)                   ~> 500 { error: "delete failed" }
+  |> respond 200 { deleted: "true" }

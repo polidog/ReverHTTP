@@ -1,0 +1,102 @@
+{
+  "version": "0.1",
+  "imports": {
+    "fetch": {
+      "source": "github.com/reverhttp/std-fetch",
+      "version": "0.1.0"
+    }
+  },
+  "routes": [
+    {
+      "route": {
+        "method": "GET",
+        "path": "/accounts/{id}"
+      },
+      "input": {
+        "id": {
+          "from": "path.id"
+        },
+        "role": {
+          "from": "header.x-role"
+        }
+      },
+      "validate": {
+        "rules": {
+          "id": {
+            "type": "int",
+            "min": 1
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "error": {
+          "status": 400,
+          "body": {
+            "error": "invalid input"
+          }
+        }
+      },
+      "transform_in": {
+        "id": {
+          "cast": "int",
+          "from": "id"
+        }
+      },
+      "process": {
+        "steps": [
+          {
+            "bind": "account",
+            "match": {
+              "on": "role",
+              "arms": [
+                {
+                  "pattern": {
+                    "value": "user"
+                  },
+                  "use": "fetch",
+                  "input": {
+                    "id": "id",
+                    "type": "User"
+                  }
+                },
+                {
+                  "pattern": {
+                    "value": "admin"
+                  },
+                  "use": "fetch",
+                  "input": {
+                    "id": "id",
+                    "type": "Admin"
+                  }
+                }
+              ],
+              "default": {
+                "error": {
+                  "status": 400,
+                  "body": {
+                    "error": "unknown role"
+                  }
+                }
+              }
+            },
+            "error": {
+              "status": 404,
+              "body": {
+                "error": "account not found"
+              }
+            }
+          }
+        ]
+      },
+      "output": {
+        "status": 200,
+        "body": {
+          "id": "account.id",
+          "name": "account.name",
+          "role": "role"
+        }
+      }
+    }
+  ]
+}
