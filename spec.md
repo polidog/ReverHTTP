@@ -948,6 +948,8 @@ GET /public/health
 
 ## 構文
 
+### リモートパッケージ
+
 ```
 import <alias> = <source>@<version>
 ```
@@ -955,8 +957,30 @@ import <alias> = <source>@<version>
 | 要素 | 説明 |
 |------|------|
 | `<alias>` | パイプライン内で使う名前 |
-| `<source>` | GitHubリポジトリパス or ローカルパス |
+| `<source>` | GitHubリポジトリパス |
 | `@<version>` | Gitタグ（`@0.1.0`）または `@latest` |
+
+### ローカルファイル
+
+```
+import <alias> = @/<path>
+```
+
+| 要素 | 説明 |
+|------|------|
+| `<alias>` | パイプライン内で使う名前 |
+| `@/` | プロジェクトルートからの絶対パスを示すプレフィックス |
+| `<path>` | `step.rever` を含むディレクトリ、または `.rever` ファイルへのパス |
+
+`@/` はプロジェクトルート（`rever.lock.json` が存在するディレクトリ）を基準とする。ローカルimportはバージョン指定を持たず、常にファイルシステム上の現在の内容が参照される。
+
+```
+# ディレクトリを指定（step.rever が読み込まれる）
+import fetch = @/steps/custom-fetch
+
+# .rever ファイルを直接指定
+import fetch = @/src/user/fetch.rever
+```
 
 ## データ層の切り替え
 
@@ -971,6 +995,9 @@ import fetch = github.com/reverhttp/prisma-fetch@0.1.0
 
 # 汎用（AIが生成）
 import fetch = github.com/reverhttp/std-fetch@0.1.0
+
+# プロジェクト固有のカスタム実装
+import fetch = @/src/user/fetch.rever
 ```
 
 ## 例: キャッシュ経由でのデータ取得
@@ -993,6 +1020,8 @@ GET /users/{id}/cached
 
 ## JSON IR
 
+リモートパッケージとローカルファイルは同じ `"imports"` セクションに格納される。ローカルimportは `"local": true` で区別し、`"version"` を持たない。
+
 ```json
 {
   "imports": {
@@ -1003,6 +1032,10 @@ GET /users/{id}/cached
     "redis-cache": {
       "source": "github.com/someone/redis-cache",
       "version": "2.0.0"
+    },
+    "custom-fetch": {
+      "source": "@/src/user/fetch.rever",
+      "local": true
     }
   }
 }
@@ -1120,15 +1153,22 @@ impl/ に対象言語の実装がある？
 
 - `@latest` は解決時点の最新タグでロックされる
 - `rever.lock.json` をリポジトリにコミットすれば、チーム全員が同じバージョンで動く
+- ローカルimport（`@/` プレフィックス）はロックファイルの対象外。ファイルシステム上の現在の内容が常に使われる
 
 ## プロジェクト構成例
 
 ```
 my-project/
   rever.lock.json                # ロックファイル（自動生成）
-  steps/                        # ローカルのカスタムステップ
-    custom-fetch/
-      step.rever
+  src/
+    user/
+      fetch.rever                # ローカルステップ（import fetch = @/src/user/fetch.rever）
+      create.rever               # ローカルステップ（import create = @/src/user/create.rever）
+  steps/                         # ローカルのカスタムステップ（ディレクトリ形式）
+    custom-cache/
+      step.rever                 # import custom-cache = @/steps/custom-cache
+      impl/
+        ts/handler.ts
   routes/
     users.rever                  # ルート定義
     accounts.rever
