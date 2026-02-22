@@ -102,6 +102,7 @@ POST /articles
 
 ```
 cmd/reverc/        CLI ツール
+cmd/rever-lsp/     Language Server (LSP)
 internal/
   token/           トークン定義
   lexer/           字句解析器
@@ -109,9 +110,106 @@ internal/
   parser/          構文解析器 (再帰下降)
   ir/              IR データ構造
   gen/             AST → IR 変換
+  lsp/             LSP サーバー実装
+editors/vscode/    VS Code 拡張
 examples/          サンプル .rever ファイル
 testdata/          テスト用データ
 spec.md            ReverHTTP v0.1 仕様書
+```
+
+## エディタ連携 (Language Server)
+
+ReverHTTP LSP サーバーにより、エディタ上でリアルタイムの構文エラー表示とキーワード補完が利用できます。
+
+### LSP サーバーのインストール
+
+```bash
+go install github.com/polidog/reverhttp/cmd/rever-lsp@latest
+```
+
+### VS Code
+
+`editors/vscode/` に VS Code 拡張が含まれています。
+
+```bash
+cd editors/vscode
+npm install
+npm run compile
+```
+
+拡張をインストールするには、上記でビルド後、VS Code の「拡張機能: VSIX からインストール」を使うか、開発中は以下で起動できます:
+
+```bash
+code --extensionDevelopmentPath=./editors/vscode
+```
+
+`rever-lsp` が PATH に入っていれば自動的に接続されます。パスをカスタマイズする場合は VS Code の設定で `reverhttp.serverPath` を指定してください。
+
+### Neovim (LazyVim)
+
+`~/.config/nvim/lua/plugins/reverhttp.lua` を作成:
+
+```lua
+vim.filetype.add({
+  extension = {
+    rever = "rever",
+  },
+})
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "rever",
+  callback = function()
+    vim.bo.commentstring = "# %s"
+  end,
+})
+
+return {
+  {
+    "neovim/nvim-lspconfig",
+    opts = {
+      servers = {
+        rever_lsp = {},
+      },
+      setup = {
+        rever_lsp = function()
+          local configs = require("lspconfig.configs")
+          if not configs.rever_lsp then
+            configs.rever_lsp = {
+              default_config = {
+                cmd = { "rever-lsp" },
+                filetypes = { "rever" },
+                root_dir = require("lspconfig.util").root_pattern(".git", "go.mod"),
+                settings = {},
+              },
+            }
+          end
+        end,
+      },
+    },
+  },
+}
+```
+
+シンタックスハイライトを追加するには `~/.config/nvim/syntax/rever.vim` を作成してください。サンプルはリポジトリの `editors/vscode/` を参考にしてください。
+
+### Neovim (nvim-lspconfig のみ)
+
+LazyVim を使わない場合は `init.lua` に直接記述できます:
+
+```lua
+vim.filetype.add({ extension = { rever = "rever" } })
+
+local configs = require("lspconfig.configs")
+if not configs.rever_lsp then
+  configs.rever_lsp = {
+    default_config = {
+      cmd = { "rever-lsp" },
+      filetypes = { "rever" },
+      root_dir = require("lspconfig.util").root_pattern(".git", "go.mod"),
+    },
+  }
+end
+require("lspconfig").rever_lsp.setup({})
 ```
 
 ## テスト
