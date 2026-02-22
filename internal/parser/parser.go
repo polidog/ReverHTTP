@@ -731,8 +731,7 @@ func (p *Parser) parseMatch() *ast.MatchStep {
 	m := &ast.MatchStep{}
 
 	if p.curIs(token.IDENT) {
-		m.On = p.cur.Literal
-		p.nextToken()
+		m.On = p.parseDottedName()
 	}
 
 	if !p.curIs(token.LBRACE) {

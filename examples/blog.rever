@@ -1,0 +1,96 @@
+import fetch  = github.com/reverhttp/std-fetch@0.1.0
+import create = github.com/reverhttp/std-create@0.1.0
+import update = github.com/reverhttp/std-update@0.1.0
+import delete = github.com/reverhttp/std-delete@0.1.0
+
+type Article {
+  id: int
+  title: string
+  body: string
+  status: string
+  author_id: int
+  created_at: datetime
+  updated_at: datetime
+}
+
+type Comment {
+  id: int
+  article_id: int
+  body: string
+  author_name: string
+  created_at: datetime
+}
+
+defaults
+  cors(origins: ["https://blog.example.com"], credentials)
+  auth(bearer)
+
+# 記事一覧
+GET /articles
+  cache(max-age: 60, public, vary: [Accept, Authorization])
+  |> fetch(Article) as articles
+  |> respond 200 { articles: articles }
+
+# 記事詳細
+GET /articles/{id}
+  cache(max-age: 300, public, etag: hash(article))
+  |> input(id: path.id)
+  |> validate(id: int & min(1))                    ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(Article, id) as article                  ~> 404 { error: "article not found" }
+  |> respond 200 { id: article.id, title: article.title, body: article.body, status: article.status }
+
+# 記事作成
+POST /articles
+  auth(bearer, roles: ["author", "admin"]) as current_user
+  |> input(title: body.title, body: body.body)
+  |> validate(
+       title: string & min(1) & max(200),
+       body: string & min(1)
+     )                                              ~> 400 { error: "validation failed" }
+  |> transform(title: trim(title), body: trim(body))
+  |> create(Article, { title, body }) as article    ~> 500 { error: "creation failed" }
+  |> respond 201 { id: article.id, title: article.title }
+
+# 記事更新
+PUT /articles/{id}
+  auth(bearer, roles: ["author", "admin"]) as current_user
+  |> input(id: path.id, title: body.title, body: body.body)
+  |> validate(
+       id: int & min(1),
+       title: string & min(1) & max(200),
+       body: string & min(1)
+     )                                              ~> 400 { error: "validation failed" }
+  |> transform(id: int(id), title: trim(title))
+  |> fetch(Article, id) as article                  ~> 404 { error: "article not found" }
+  |> update(Article, id, { title, body }) as article ~> 500 { error: "update failed" }
+  |> respond 200 { id: article.id, title: article.title, body: article.body }
+
+# 記事削除
+DELETE /articles/{id}
+  auth(bearer, roles: ["admin"])
+  |> input(id: path.id)
+  |> validate(id: int & min(1))                    ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(Article, id) as article                  ~> 404 { error: "article not found" }
+  |> delete(Article, id)                            ~> 500 { error: "delete failed" }
+  |> respond 204
+
+# 記事のステータスで分岐
+GET /articles/{id}/view
+  |> input(id: path.id)
+  |> validate(id: int & min(1))                    ~> 400 { error: "invalid id" }
+  |> transform(id: int(id))
+  |> fetch(Article, id) as article                  ~> 404 { error: "not found" }
+  |> match article.status {
+       "published": fetch(Comment, article_id: id)
+       "draft":                                     ~> 403 { error: "draft not viewable" }
+       _:                                           ~> 404 { error: "unknown status" }
+     } as comments                                  ~> 500 { error: "failed to load comments" }
+  |> respond 200 { id: article.id, title: article.title, comments: comments }
+
+# ヘルスチェック（認証不要）
+GET /health
+  cors(none)
+  auth(none)
+  |> respond 200 { status: "ok" }
