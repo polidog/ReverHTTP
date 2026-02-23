@@ -37,6 +37,10 @@ func (p *Parser) addError(msg string) {
 	p.errors = append(p.errors, fmt.Sprintf("%s:%d:%d: %s", pos.File, pos.Line, pos.Column, msg))
 }
 
+func (p *Parser) addErrorAt(pos token.Position, msg string) {
+	p.errors = append(p.errors, fmt.Sprintf("%s:%d:%d: %s", pos.File, pos.Line, pos.Column, msg))
+}
+
 func (p *Parser) nextToken() {
 	p.cur = p.peek
 	p.peek = p.l.NextToken()
@@ -447,6 +451,8 @@ func (p *Parser) parseRoute() *ast.Route {
 		p.skipNewlines()
 	}
 
+	p.validateRoute(route)
+
 	return route
 }
 
@@ -532,6 +538,7 @@ func (p *Parser) parseInput() *ast.InputStep {
 
 		if p.curIs(token.COLON) {
 			p.nextToken() // skip ':'
+			field.Pos = p.cur.Pos
 			field.From = p.parseDottedName()
 		}
 
@@ -1074,4 +1081,45 @@ func isUpperCase(s string) bool {
 		return false
 	}
 	return unicode.IsUpper(rune(s[0]))
+}
+
+// validateRoute checks that path.* references in input steps refer to parameters
+// actually defined in the route path (e.g., {id}, {slug}).
+func (p *Parser) validateRoute(route *ast.Route) {
+	pathParams := extractPathParams(route.Path)
+	for _, step := range route.Steps {
+		if step.Kind == ast.StepInput && step.Input != nil {
+			for _, field := range step.Input.Fields {
+				if strings.HasPrefix(field.From, "path.") {
+					name := field.From[5:]
+					if !pathParams[name] {
+						p.addErrorAt(field.Pos, fmt.Sprintf(
+							"path parameter %q is not defined in route path %q",
+							name, route.Path))
+					}
+				}
+			}
+		}
+	}
+}
+
+// extractPathParams extracts parameter names from a route path like "/users/{id}/posts/{slug}".
+func extractPathParams(path string) map[string]bool {
+	params := make(map[string]bool)
+	for {
+		start := strings.Index(path, "{")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(path[start:], "}")
+		if end == -1 {
+			break
+		}
+		name := path[start+1 : start+end]
+		if name != "" {
+			params[name] = true
+		}
+		path = path[start+end+1:]
+	}
+	return params
 }

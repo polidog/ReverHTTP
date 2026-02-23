@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/polidog/reverhttp/internal/ast"
@@ -530,5 +531,69 @@ func TestParseAuthWithBind(t *testing.T) {
 	}
 	if d.Bind != "current_user" {
 		t.Fatalf("expected bind 'current_user', got %q", d.Bind)
+	}
+}
+
+func TestValidatePathParam(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name: "valid path.id with {id}",
+			input: `GET /users/{id}
+  |> input(id: path.id)
+  |> respond 200 { id: id }`,
+			wantError: false,
+		},
+		{
+			name: "invalid path.bar with {id}",
+			input: `GET /users/{id}
+  |> input(id: path.id, foo: path.bar)
+  |> respond 200 { id: id }`,
+			wantError: true,
+			errorMsg:  `path parameter "bar" is not defined in route path "/users/{id}"`,
+		},
+		{
+			name: "multiple valid path params",
+			input: `GET /users/{id}/posts/{slug}
+  |> input(id: path.id, slug: path.slug)
+  |> respond 200 { id: id }`,
+			wantError: false,
+		},
+		{
+			name: "non-path sources not validated",
+			input: `POST /users
+  |> input(name: body.name, role: header.x-role, q: query.q)
+  |> respond 200 { name: name }`,
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errs := parseWithErrors(t, tt.input)
+			if tt.wantError {
+				if len(errs) == 0 {
+					t.Fatal("expected error, got none")
+				}
+				found := false
+				for _, e := range errs {
+					if strings.Contains(e, tt.errorMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("expected error containing %q, got %v", tt.errorMsg, errs)
+				}
+			} else {
+				if len(errs) > 0 {
+					t.Fatalf("expected no errors, got %v", errs)
+				}
+			}
+		})
 	}
 }

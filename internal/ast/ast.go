@@ -105,6 +105,7 @@ type InputStep struct {
 
 // InputField represents a field in input().
 type InputField struct {
+	Pos  token.Position // position of From expression (e.g., "path.id")
 	Name string
 	From string // e.g., "path.id", "body.name", "header.x-role"
 }
