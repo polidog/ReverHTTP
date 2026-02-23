@@ -32,8 +32,8 @@ go install github.com/polidog/reverhttp/cmd/reverc@latest
 またはソースからビルド:
 
 ```bash
-git clone https://github.com/polidog/http-ir.git
-cd http-ir
+git clone https://github.com/polidog/reverhttp.git
+cd reverhttp
 go build -o reverc ./cmd/reverc
 ```
 
